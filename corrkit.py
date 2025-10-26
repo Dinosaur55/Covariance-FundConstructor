@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 import matplotlib.pyplot as plt
 import shutil
 
@@ -138,18 +138,118 @@ class CorrKit:
             R.to_csv(output_csv, index=True)
         return R
 
+    def clean_profit_matrix(self, R: pd.DataFrame, output_csv: Optional[str] = None,
+                            plot_path: str = "pareto_mu_sigma.pdf",
+                            target_k: Optional[int] = 40) -> pd.DataFrame:
+        """
+        基于 Pareto 思想在 (σ, μ) 平面进行筛选，并按夏普比率补齐到目标数量，返回精选后的收益矩阵 R_clean。
+
+        - 指标定义：按列计算收益均值 μ_i 与标准差 σ_i（总体标准差 ddof=0）。
+        - 优劣方向：在“收益更高（μ 大）且波动更低（σ 小）”的方向更优。
+        - 支配关系定义（j 支配 i）：μ_j ≥ μ_i 且 σ_j ≤ σ_i，且至少一项严格不等。
+    - 选择规则（第一步，严格 Pareto）：仅保留“未被任何股票支配”的股票（即 dominated_count == 0）。
+    - 选择规则（第二步，若目标数 target_k 指定且尚不足）：对未入选的其他股票，按夏普比率 μ/σ 从高到低补齐至 target_k。
+        - 输出：
+            1) 以紫色标注被 ≤1 支配的股票，其余为黑色的 (σ, μ) 散点图，并保存到 plot_path。
+            2) 返回仅包含所选股票列的 R_clean（列顺序保持与 R 一致）。
+            3) 若提供 output_csv，则将 R_clean 保存为 CSV。
+        """
+        # 计算每只股票的收益均值与标准差
+        mu = R.mean(axis=0)
+        sigma = R.std(axis=0, ddof=0)
+        stats = pd.DataFrame({"mu": mu, "sigma": sigma})
+
+        # 计算每只股票被“更高收益且更低波动”支配的次数（O(N^2)）
+        tickers = stats.index
+        mu_arr = stats["mu"].values
+        sigma_arr = stats["sigma"].values
+        N = len(tickers)
+        # 构造 (N,N) 的比较矩阵：行 i 被列 j 支配？
+        mu_i = mu_arr.reshape(N, 1)
+        mu_j = mu_arr.reshape(1, N)
+        sigma_i = sigma_arr.reshape(N, 1)
+        sigma_j = sigma_arr.reshape(1, N)
+        cond_mu = (mu_j >= mu_i)
+        cond_sigma = (sigma_j <= sigma_i)
+        strict = (mu_j > mu_i) | (sigma_j < sigma_i)
+        dom_mat = cond_mu & cond_sigma & strict
+        # 去掉自身比较
+        np.fill_diagonal(dom_mat, False)
+        dominated_count = dom_mat.sum(axis=1)
+        # 严格非支配（Pareto front）：未被任何股票支配
+        selected_mask = dominated_count == 0
+        selected_idx = tickers[selected_mask]
+
+        # 若需要，按夏普比率补齐到 target_k
+        if target_k is not None and len(selected_idx) < target_k:
+            # 计算 Sharpe，忽略 σ<=0 的情况
+            stats["sharpe"] = stats["mu"] / stats["sigma"].replace(0, np.nan)
+            remaining = stats.index.difference(selected_idx)
+            remaining = [t for t in remaining if np.isfinite(stats.loc[t, "sharpe"]) ]
+            top_fill = (
+                stats.loc[remaining]
+                .sort_values(by="sharpe", ascending=False)
+            )
+            need = max(0, int(target_k) - len(selected_idx))
+            to_add = list(top_fill.index[:need])
+            selected_idx = pd.Index(selected_idx.tolist() + to_add)
+
+        # 绘制 (σ, μ) 散点图：被 ≤2 支配/或 Sharpe 补齐 的为紫色，其余为黑色
+        plt.figure(figsize=(7, 5))
+        # 先画其他点（黑色）
+        others = stats.index.difference(selected_idx)
+        plt.scatter(stats.loc[others, "sigma"], stats.loc[others, "mu"],
+                    c="#000000", s=18, alpha=0.7, label="Others")
+        # 再画所选集合（紫色）
+        # 使用 rc_context 禁用 usetex，避免环境依赖导致的渲染报错
+        try:
+            with plt.rc_context({"text.usetex": False}):
+                plt.scatter(stats.loc[selected_idx, "sigma"], stats.loc[selected_idx, "mu"],
+                            c="#7E57C2", s=36, alpha=0.95, label="Selected")
+                plt.xlabel(r"$\sigma$ (volatility)")
+                plt.ylabel(r"$\mu$ (mean return)")
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(plot_path)
+        except Exception:
+            # 兜底：若仍失败，降级去掉数学文本渲染
+            try:
+                with plt.rc_context({"text.usetex": False}):
+                    plt.xlabel("sigma (volatility)")
+                    plt.ylabel("mu (mean return)")
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig(plot_path)
+            finally:
+                pass
+        finally:
+            plt.close()
+
+        # 构造精选后的收益矩阵（按原列顺序保留）
+        selected_cols = [c for c in R.columns if c in set(selected_idx)]
+        R_clean = R.loc[:, selected_cols]
+
+        if output_csv:
+            R_clean.to_csv(output_csv, index=True)
+
+        return R_clean
+
     def compute_correlation_matrix(self, R: pd.DataFrame, output_csv: Optional[str] = None) -> pd.DataFrame:
         """
         基于 R_full 按列归一化后计算关联矩阵 C，G[t,i] = (r_{t,i} - <r_i>)/sigma_i，C = (1/T) G^T G。
         """
         T = R.shape[0]
         mu = R.mean(axis=0)
+        # 使用总体标准差(ddof=0)，为了让G矩阵中每个元素方差为1
         sigma = R.std(axis=0, ddof=0)
+        # 去除标准差为 0 的列，避免除零
         nonzero = sigma != 0
         R = R.loc[:, nonzero]
         mu = mu[nonzero]
         sigma = sigma[nonzero]
+        # 标准化后的收益矩阵 G
         G = (R - mu) / sigma
+        # 关联矩阵 C = (1/T) G^T G
         C = (G.T @ G) / T
         if output_csv:
             C.to_csv(output_csv, index=True)
@@ -239,10 +339,166 @@ class CorrKit:
             CV.to_csv(output_csv, index=True)
         return CV
 
+    def optimize_portfolio(self, beta: Union[pd.Series, pd.DataFrame, np.ndarray], C: pd.DataFrame):
+        """
+        根据给定的 beta 向量与协方差矩阵 C，计算最优权重向量 omega，并以与 beta 相同的格式返回。
+
+        数学定义（beta 与 u 视为行向量，C 取逆）：
+            uu = u C^{-1} u^T
+            ub = u C^{-1} beta^T
+            bu = beta C^{-1} u^T
+            bb = beta C^{-1} beta^T
+            omega = ((bb - ub) u C^{-1} + (uu - bu) beta C^{-1}) / (uu*bb - ub*bu)
+
+        参数：
+            beta: 资产的 beta 向量。支持以下格式：
+                  - pandas.Series（index 为资产代码）
+                  - pandas.DataFrame（1×N 行向量 或 N×1 列向量）
+                  - numpy.ndarray（形状 (N,), (1,N) 或 (N,1)）
+            C:    协方差矩阵（N×N，行列索引为资产代码）。
+
+        返回：与传入 beta 相同的类型与“行/列”形状。
+        """
+        # 提取并（必要时）对齐资产顺序
+        tickers = list(C.columns)
+        X = C.values
+        # 逆或伪逆，提升鲁棒性
+        try:
+            X_inv = np.linalg.inv(X)
+        except np.linalg.LinAlgError:
+            X_inv = np.linalg.pinv(X)
+
+        # 将 beta 标准化为 1×N 的 numpy 行向量，同时记录其原始“格式”以便还原
+        beta_type = None
+        beta_meta = {}
+
+        if isinstance(beta, pd.Series):
+            beta_type = 'series'
+            b_series = beta.reindex(tickers)
+            if b_series.isna().any():
+                missing = list(b_series[b_series.isna()].index)
+                raise ValueError(f"beta 中缺少与协方差矩阵匹配的资产：{missing}")
+            b_row = b_series.values.reshape(1, -1)
+        elif isinstance(beta, pd.DataFrame):
+            if beta.shape[0] == 1:  # 行向量
+                beta_type = 'df_row'
+                beta_meta['index'] = beta.index
+                b_df = beta.loc[:, tickers]
+                b_row = b_df.values  # 1×N
+            elif beta.shape[1] == 1:  # 列向量
+                beta_type = 'df_col'
+                beta_meta['columns'] = beta.columns
+                b_df = beta.reindex(tickers)
+                if b_df.isna().any().any():
+                    raise ValueError("beta 列向量与协方差矩阵资产列表不匹配（存在缺失）。")
+                b_row = b_df.values.reshape(1, -1)  # 转为 1×N
+            else:
+                raise ValueError("beta DataFrame 需为 1×N（行）或 N×1（列）形状。")
+        elif isinstance(beta, np.ndarray):
+            beta_type = 'ndarray'
+            if beta.ndim == 1:
+                if beta.shape[0] != len(tickers):
+                    raise ValueError("beta 一维数组长度需与 C 维度一致。")
+                b_row = beta.reshape(1, -1)
+                beta_meta['shape'] = (len(tickers),)
+            elif beta.ndim == 2 and beta.shape in [(1, len(tickers)), (len(tickers), 1)]:
+                if beta.shape[0] == 1:  # 1×N
+                    b_row = beta
+                else:  # N×1
+                    b_row = beta.T
+                beta_meta['shape'] = beta.shape
+            else:
+                raise ValueError("beta ndarray 需为 (N,), (1,N) 或 (N,1) 形状。")
+        else:
+            raise TypeError("beta 类型不支持，请使用 pandas Series/DataFrame 或 numpy ndarray。")
+
+        # u 行向量
+        u_row = np.ones((1, len(tickers)), dtype=float)
+
+        # 先计算 uC^{-1} 与 bC^{-1}
+        uX = u_row @ X_inv           # 1×N
+        bX = b_row @ X_inv           # 1×N
+
+        # 标量项
+        uu = float(uX @ u_row.T)
+        ub = float(uX @ b_row.T)
+        bu = float(bX @ u_row.T)
+        bb = float(bX @ b_row.T)
+
+        denom = uu * bb - ub * bu
+        if not np.isfinite(denom) or abs(denom) < 1e-12:
+            raise ValueError("目标函数的分母 uu*bb - ub*bu 过小或无效，无法稳定求解权重。")
+
+        omega_row = ((bb - ub) * uX + (uu - bu) * bX) / denom  # 1×N
+
+        # 还原为与 beta 相同的外观/格式
+        if beta_type == 'series':
+            return pd.Series(omega_row.ravel(), index=tickers, name='omega')
+        if beta_type == 'df_row':
+            return pd.DataFrame(omega_row, index=beta_meta['index'], columns=tickers)
+        if beta_type == 'df_col':
+            return pd.DataFrame(omega_row.T, index=tickers, columns=beta_meta['columns'])
+        if beta_type == 'ndarray':
+            shp = beta_meta.get('shape')
+            if shp == (len(tickers),):
+                return omega_row.ravel()
+            if shp == (1, len(tickers)):
+                return omega_row
+            if shp == (len(tickers), 1):
+                return omega_row.T
+        # 理论上不会到达此处
+        return pd.Series(omega_row.ravel(), index=tickers, name='omega')
+
+    def compute_beta_factors(self, R_index: pd.DataFrame, R_assets: pd.DataFrame) -> pd.Series:
+        """
+        计算多只股票相对于“市场指数”的 Beta 因子：
+            beta_i = Cov(r_i, r_m) / Var(r_m)
+
+        参数：
+            R_index: 指数的收益矩阵（应为单列，索引为日期）
+            R_assets: 多只股票的收益矩阵（列为股票，索引为日期）
+
+        处理步骤：
+            - 按日期对齐（内连接），并去除对齐后的 NaN
+            - 采用总体协方差/方差（均值去除后再按 T 的平均）以与本项目其它计算保持一致
+
+        返回：
+            pandas Series，index=R_assets 的列名，值为对应的 beta
+        """
+        if R_index.shape[1] != 1:
+            # 若传入多列，取第一列并提示
+            idx_cols = list(R_index.columns)
+            R_index = R_index.iloc[:, [0]]
+            print(f"警告：R_index 包含多列，已使用第一列 {idx_cols[0]} 进行 Beta 计算。")
+
+        # 对齐日期
+        df = R_assets.join(R_index, how="inner")
+        df = df.dropna(how="any")
+        if df.shape[0] < 2:
+            raise ValueError("用于计算 Beta 的对齐样本不足（少于 2 行）。")
+
+        # 拆分指数列与资产列
+        m = df.iloc[:, -1]  # 最后一列为指数
+        X = df.iloc[:, :-1] # 前面的列为资产
+
+        # 指数的均值与方差（总体）
+        mu_m = m.mean()
+        var_m = ((m - mu_m) ** 2).mean()
+        if var_m == 0 or not np.isfinite(var_m):
+            raise ValueError("指数收益的方差为 0 或无效，无法计算 Beta。")
+
+        # 各资产的均值
+        mu_i = X.mean(axis=0)
+        # 协方差：E[(r_i - mu_i)(r_m - mu_m)]
+        cov_im = ((X - mu_i) * (m - mu_m).values.reshape(-1, 1)).mean(axis=0)
+        beta = cov_im / var_m
+        beta.name = "beta"
+        return beta
+
     def plot_eigensystem(self, eigvals: np.ndarray, eigvecs: np.ndarray, T: int, N: int,
                           eigenvalues_pdf: str = "eigenvalues.pdf", eigenvectors_pdf: str = "eigenvectors.pdf") -> None:
         """
-        绘制谱系结果（图中文字为英文，代码注释为中文）：
+        绘制谱系结果：
           - 本征值直方图（与随机矩阵理论 MP 密度对比，并标注 λ±）
           - 上排：最大的 3 个本征向量元素分布；下排：第 50、100、200 个本征向量元素分布
         说明：不生成随机矩阵，仅叠加理论曲线。
@@ -281,7 +537,6 @@ class CorrKit:
         plt.plot([], [], color="#72B7B2", linestyle="--", linewidth=1.5, label=rf"$\lambda_+ = {lam_plus:.3f}$")
         plt.xlabel(r"$\lambda$")
         plt.ylabel(r"$p(\lambda)$")
-        plt.title("Eigenvalue distribution: empirical vs RMT")
         # x 轴范围设为 [0, 略高于第 4 大本征值]
         plt.xlim(start, right)
         plt.legend()

@@ -4,6 +4,73 @@ import time
 import random
 from tqdm import tqdm
 
+def download_index_close_baostock(index_code: str = "sh.000300",
+                                  start_date: str = "2022-10-01",
+                                  end_date: str = "2024-10-01",
+                                  output_csv: str = "hs300_index_close.csv",
+                                  max_retries: int = 3) -> pd.DataFrame:
+    """
+    下载单一指数(日线收盘价)，输出与股票价格矩阵一致的 CSV 格式：
+    - 第 1 列为日期索引
+    - 其余列为价格列（这里只有 1 列，列名为 index_code）
+
+    参数：
+      index_code: 指数代码（Baostock 格式，沪深300 为 "sh.000300"）
+      start_date: 起始日期，YYYY-MM-DD
+      end_date:   结束日期，YYYY-MM-DD
+      output_csv: 输出 CSV 路径
+      max_retries: 失败重试次数
+    返回：
+      DataFrame，index=日期，列=[index_code]
+    """
+    lg = bs.login()
+    print("登录 Baostock:", lg.error_code, lg.error_msg)
+
+    success = False
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            rs = bs.query_history_k_data_plus(
+                index_code,
+                "date,close",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="3"  # 不复权
+            )
+            if rs.error_code != "0":
+                raise RuntimeError(f"baostock error {rs.error_code}: {rs.error_msg}")
+
+            data_list = []
+            while rs.next():
+                data_list.append(rs.get_row_data())
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            if df.empty:
+                raise RuntimeError("empty result")
+
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+            df = df.rename(columns={"close": index_code})
+            df = df[[index_code]]
+            success = True
+            break
+        except Exception as e:
+            last_err = e
+            wait = random.uniform(1.0, 2.0)
+            print(f"⚠️ 指数 {index_code} 第 {attempt+1} 次失败 ({e})，{wait:.1f}s 后重试")
+            time.sleep(wait)
+
+    bs.logout()
+    print("登出 Baostock")
+
+    if not success:
+        raise RuntimeError(f"下载指数 {index_code} 失败: {last_err}")
+
+    df.sort_index(inplace=True)
+    df.to_csv(output_csv, index=True)
+    print(f"✅ 指数数据已保存为 {output_csv}，形状: {df.shape}")
+    return df
+
 def download_close_baostock(codes, start_date, end_date, output_csv="close_price_matrix.csv", max_retries=3):
     lg = bs.login()
     print("登录 Baostock:", lg.error_code, lg.error_msg)
