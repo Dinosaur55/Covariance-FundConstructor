@@ -22,8 +22,9 @@ def main():
     vals, vecs = kit.spectral_decomposition(C_full)
     kit.plot_eigensystem(vals, vecs, T=R_full.shape[0], N=R_full.shape[1],
                          eigenvalues_pdf="eigenvalues.pdf",
-                         eigenvectors_pdf="eigenvectors.pdf")
-    print("已输出本征值与本征向量分布的对比图：eigenvalues.pdf, eigenvectors.pdf")
+                         eigenvectors_pdf="eigenvectors.pdf",
+                         eigenvectors_values_pdf="eigenvectors_values.pdf")
+    print("已输出本征值与本征向量分布的对比图：eigenvalues.pdf, eigenvectors.pdf, eigenvectors_values.pdf")
 
 if __name__ == "__main__":
     main()

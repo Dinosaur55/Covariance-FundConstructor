@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Union
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import shutil
 
 # Set LaTeX font for all text
@@ -132,6 +133,49 @@ class CorrKit:
         R = logY.shift(-1, axis=0) - logY
         R = R.iloc[:-1, :]
         # 将索引对齐到“下一期”的日期
+        if len(df.index) >= 2:
+            R.index = df.index[1:]
+        if output_csv:
+            R.to_csv(output_csv, index=True)
+        return R
+
+    def compute_profit_matrix_simple(self, input_csv: Optional[str] = None, output_csv: Optional[str] = None,
+                                     start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        计算“普通收益率”（非对数）版本的收益矩阵 R_simple：
+          R[t, i] = Y[t+1, i] / Y[t, i] - 1
+
+        其它行为与 compute_profit_matrix 相同：
+        - 自动识别表头，使用第 1 列作为日期索引
+        - 可选时间窗口切片后，删除包含任意缺失的整列，仅保留完整数据的股票
+        - 删除最后一个日期对应的行
+        """
+        input_csv = input_csv or self.input_path
+        df = pd.read_csv(input_csv, index_col=0)
+        try:
+            df.index = pd.to_datetime(df.index, errors='coerce')
+        except Exception:
+            pass
+        if start_date is not None or end_date is not None:
+            start_ts = pd.to_datetime(start_date) if start_date is not None else None
+            end_ts = pd.to_datetime(end_date) if end_date is not None else None
+            if start_ts is not None and end_ts is not None and start_ts > end_ts:
+                raise ValueError("start_date 不应晚于 end_date")
+            if start_ts is not None and end_ts is not None:
+                df = df.loc[start_ts:end_ts]
+            elif start_ts is not None:
+                df = df.loc[start_ts:]
+            elif end_ts is not None:
+                df = df.loc[:end_ts]
+        if df.shape[0] < 2 or df.shape[1] < 1:
+            raise ValueError("选择的时间窗口或输入数据尺寸不符合预期；至少需要 T>=2，N>=1。")
+        Y = df.apply(pd.to_numeric, errors='coerce')
+        Y = Y.mask(~(Y > 0))
+        Y = Y.dropna(axis=1, how='any')
+        if Y.shape[1] == 0:
+            raise ValueError("删除缺失列后不再有可用股票列，请检查输入数据是否完整。")
+        R = Y.shift(-1, axis=0) / Y - 1
+        R = R.iloc[:-1, :]
         if len(df.index) >= 2:
             R.index = df.index[1:]
         if output_csv:
@@ -292,6 +336,7 @@ class CorrKit:
 
         返回：
             C_pr: 去噪后的关联矩阵（pandas DataFrame，索引与列与 C 对齐）。
+            额外处理：数值对称化后，将对角线强制设为 1.0 以保证相关矩阵的单位对角。
         """
         # 计算阈值 λ+
         Q = T / N
@@ -309,6 +354,8 @@ class CorrKit:
         C_pr_np = V @ np.diag(vals_kept) @ V.T
         # 数值对称化
         C_pr_np = 0.5 * (C_pr_np + C_pr_np.T)
+        # 强制单位对角
+        np.fill_diagonal(C_pr_np, 1.0)
         # 转为带标签的 DataFrame，便于保存与后续按标签运算
         C_pr = pd.DataFrame(C_pr_np, index=C.index, columns=C.columns)
         # 可选保存 CSV
@@ -496,7 +543,9 @@ class CorrKit:
         return beta
 
     def plot_eigensystem(self, eigvals: np.ndarray, eigvecs: np.ndarray, T: int, N: int,
-                          eigenvalues_pdf: str = "eigenvalues.pdf", eigenvectors_pdf: str = "eigenvectors.pdf") -> None:
+                          eigenvalues_pdf: str = "eigenvalues.pdf",
+                          eigenvectors_pdf: str = "eigenvectors.pdf",
+                          eigenvectors_values_pdf: str = "eigenvectors_values.pdf") -> None:
         """
         绘制谱系结果：
           - 本征值直方图（与随机矩阵理论 MP 密度对比，并标注 λ±）
@@ -587,3 +636,287 @@ class CorrKit:
         plt.tight_layout()
         plt.savefig(eigenvectors_pdf)
         plt.close()
+
+        # 追加：按元素序号 i 展示选定本征向量的所有分量 u_{j,i}
+        # 选择与上面相同的 6 个序号：1、2、3、以及第 50、100、200（若存在）
+        x_idx = np.arange(1, N + 1)
+        fig2, axes2 = plt.subplots(2, 3, figsize=(11, 7))
+        for k, ax in enumerate(axes2.flat):
+            if k < len(order_indices):
+                col_idx = order_indices[k]
+                vec = eigvecs[:, col_idx]
+                # 与前面一致：若为第一大本征向量且整体符号为负，则翻转符号
+                if col_idx == 0 and (np.all(vec <= 0) or np.mean(vec) < 0):
+                    vec = -vec
+                # RMT 对比时使用缩放：sqrt(N) * u_j ~ N(0,1)
+                vec_scaled = vec * np.sqrt(N)
+                ax.plot(x_idx, vec_scaled, '-', color="#4C78A8", linewidth=1.0, marker='.', markersize=2)
+                ev = eigvals[col_idx]
+                if k < 3:
+                    i_label = k + 1
+                    title = rf"$\lambda_{{{i_label}}} = {ev:.3f}$"
+                else:
+                    i_label = valid_positions[k - 3] if (k - 3) < len(valid_positions) else (k + 1)
+                    title = rf"$\lambda_{{{i_label}}} = {ev:.3f}$"
+                ax.set_title(title)
+                # 横坐标从 0 到 N，显式包含 0 刻度
+                ax.set_xlim(0, N)
+                ax.set_ylim(-4, 4)
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
+                # 确保 0 在刻度中
+                ticks = ax.get_xticks()
+                if 0.0 not in ticks:
+                    try:
+                        # 将 0 插到现有正刻度前
+                        ticks = np.array(sorted(set(np.append(ticks, [0.0]))))
+                        ax.set_xticks(ticks)
+                    except Exception:
+                        pass
+                ax.set_xlabel(r"$i$")
+                ax.set_ylabel(rf"$u_{{{i_label},i}}$")
+            else:
+                ax.axis('off')
+        plt.tight_layout()
+        plt.savefig(eigenvectors_values_pdf)
+        plt.close()
+
+    def backtest_buy_and_hold(self,
+                               omega,
+                               stock_csv: Optional[str] = None,
+                               index_csv: Optional[str] = None,
+                               start_date: Optional[str] = None,
+                               end_date: Optional[str] = None,
+                               plot_path: str = "backtest_fund_vs_hs300.pdf",
+                               omega_pr=None) -> dict:
+        """
+        基于给定权重（买入持有）回测基金净值，并与指数累计收益率进行比较。
+
+        参数：
+            omega:    资产权重（建议 pandas.Series，index 为资产代码）。也接受 1×N / N×1 DataFrame。
+            stock_csv: 股票价格矩阵 CSV（默认使用 self.input_path）。
+            index_csv: 指数价格 CSV（单列）。
+            start_date, end_date: 回测起止日期（包含端点；若起始日非交易日，将自动取之后的第一个可用交易日）。
+            plot_path: 输出的对比图路径（基金 vs 指数 累计收益率）。
+            omega_pr: 可选，第二组权重（例如基于 C_pr 计算的权重），用于横向对比。
+
+        返回：包含关键结果的字典：
+                        {
+                            'fund_nav': pd.Series, 'fund_cumret': pd.Series,
+                            'fund_returns': pd.Series, 'sharpe': dict, 'used_tickers': list,
+                            'fund_pr_nav': pd.Series, 'fund_pr_cumret': pd.Series,
+                            'fund_pr_returns': pd.Series, 'sharpe_pr': dict, 'used_tickers_pr': list,
+                            'index_cumret': pd.Series, 'index_returns': pd.Series, 'excess_returns': pd.Series,
+                            'sharpe_excess': dict, 'excess_returns_pr': pd.Series, 'sharpe_excess_pr': dict
+                        }
+        """
+        stock_csv = stock_csv or self.input_path
+        if index_csv is None:
+            raise ValueError("必须提供指数价格 CSV (index_csv)。")
+
+        # 读取股票价格
+        Y = pd.read_csv(stock_csv, index_col=0)
+        try:
+            Y.index = pd.to_datetime(Y.index, errors='coerce')
+        except Exception:
+            pass
+        Y = Y.apply(pd.to_numeric, errors='coerce')
+        Y = Y.mask(~(Y > 0))
+        # 时间切片
+        if start_date is not None or end_date is not None:
+            start_ts = pd.to_datetime(start_date) if start_date is not None else None
+            end_ts = pd.to_datetime(end_date) if end_date is not None else None
+            if start_ts is not None and end_ts is not None and start_ts > end_ts:
+                raise ValueError("start_date 不应晚于 end_date")
+            if start_ts is not None and end_ts is not None:
+                Y = Y.loc[start_ts:end_ts]
+            elif start_ts is not None:
+                Y = Y.loc[start_ts:]
+            elif end_ts is not None:
+                Y = Y.loc[:end_ts]
+        if Y.shape[0] < 2:
+            raise ValueError("回测窗口内交易日不足。")
+
+        def compute_fund_nav(omega_like):
+            # 解析权重
+            if isinstance(omega_like, pd.Series):
+                w_local = omega_like.copy()
+                tickers_local = list(w_local.index)
+            elif isinstance(omega_like, pd.DataFrame):
+                if omega_like.shape[0] == 1:  # 行向量
+                    w_local = omega_like.iloc[0, :].copy()
+                    w_local.index = omega_like.columns
+                    tickers_local = list(omega_like.columns)
+                elif omega_like.shape[1] == 1:  # 列向量
+                    w_local = omega_like.iloc[:, 0].copy()
+                    w_local.index = omega_like.index
+                    tickers_local = list(omega_like.index)
+                else:
+                    raise ValueError("omega DataFrame 需为 1×N 或 N×1。")
+            else:
+                raise TypeError("回测函数需传入 pandas Series 或 DataFrame 格式的权重。")
+
+            # 仅保留权重涉及且完整的资产
+            missing_cols_local = [t for t in tickers_local if t not in Y.columns]
+            if len(missing_cols_local) > 0:
+                print(f"警告：价格矩阵缺少以下资产，将从回测中剔除：{missing_cols_local}")
+            keep_local = [t for t in tickers_local if t in Y.columns]
+            Y_sel_local = Y.loc[:, keep_local]
+            Y_sel_local = Y_sel_local.dropna(axis=1, how='any')
+            used_tickers_local = list(Y_sel_local.columns)
+            if len(used_tickers_local) == 0:
+                raise ValueError("回测窗口内所有选中资产存在缺失，无法回测。")
+            Y_sel_local = Y_sel_local.dropna(axis=0, how='any')
+
+            # 对齐并归一化权重
+            w_used_local = w_local.reindex(used_tickers_local).astype(float).fillna(0.0)
+            sum_abs_local = w_used_local.abs().sum()
+            if sum_abs_local == 0:
+                raise ValueError("有效权重全部为 0，无法回测。")
+            s_local = w_used_local.sum()
+            if s_local == 0:
+                w_used_local = (w_used_local / sum_abs_local)
+            else:
+                w_used_local = w_used_local / s_local
+
+            # NAV 曲线
+            P_local = Y_sel_local
+            P0_local = P_local.iloc[0, :]
+            rel_local = P_local.divide(P0_local, axis=1)
+            nav_local = 100.0 * rel_local.mul(w_used_local, axis=1).sum(axis=1)
+            return nav_local, used_tickers_local
+
+        # 指数累计收益
+        idx_df = pd.read_csv(index_csv, index_col=0)
+        try:
+            idx_df.index = pd.to_datetime(idx_df.index, errors='coerce')
+        except Exception:
+            pass
+        idx_df = idx_df.apply(pd.to_numeric, errors='coerce')
+        # 切片到同一时间窗
+        if start_date is not None or end_date is not None:
+            if start_date is not None:
+                idx_df = idx_df.loc[pd.to_datetime(start_date):]
+            if end_date is not None:
+                idx_df = idx_df.loc[:pd.to_datetime(end_date)]
+        # 对齐到 NAV 的日期（内连接）
+        # 计算第一组权重（omega）对应的净值
+        nav, used_tickers = compute_fund_nav(omega)
+
+        # 计算可选的第二组权重（omega_pr）对应的净值
+        nav_pr = None
+        used_tickers_pr = None
+        if omega_pr is not None:
+            nav_pr, used_tickers_pr = compute_fund_nav(omega_pr)
+
+        both = pd.DataFrame({'NAV': nav}).join(idx_df.iloc[:, [0]].rename(columns={idx_df.columns[0]: 'INDEX'}), how='inner')
+        both = both.dropna(how='any')
+        nav = both['NAV']
+        idx_price = both['INDEX']
+        idx_cumret = idx_price / idx_price.iloc[0] - 1.0
+        fund_cumret = nav / nav.iloc[0] - 1.0
+        # 若有第二组权重，则与指数对齐（因指数可能缺某些基金日期）
+        if nav_pr is not None:
+            both_pr = pd.DataFrame({'NAV_PR': nav_pr}).join(idx_df.iloc[:, [0]].rename(columns={idx_df.columns[0]: 'INDEX'}), how='inner')
+            both_pr = both_pr.dropna(how='any')
+            nav_pr = both_pr['NAV_PR']
+            fund_pr_cumret = nav_pr / nav_pr.iloc[0] - 1.0
+        else:
+            fund_pr_cumret = None
+
+        # 基金与指数的日度普通收益率（先对齐后再求变动）
+        ret_df = both.pct_change().dropna()
+        fund_ret = ret_df['NAV']
+        idx_ret = ret_df['INDEX']
+        excess_ret = (fund_ret - idx_ret).rename('excess')
+        if nav_pr is not None:
+            ret_df_pr = both_pr.pct_change().dropna()
+            fund_ret_pr = ret_df_pr['NAV_PR']
+            excess_ret_pr = (fund_ret_pr - ret_df_pr['INDEX']).rename('excess_pr')
+        else:
+            fund_ret_pr = None
+            excess_ret_pr = None
+
+        # 计算多窗口夏普（均值/标准差；总体标准差 ddof=0）
+        sharpe_windows = [50, 100, 150, 200]
+        sharpe = {}
+        sharpe_excess = {}
+        sharpe_pr = {}
+        sharpe_excess_pr = {}
+        for wlen in sharpe_windows:
+            if len(fund_ret) >= wlen:
+                r = fund_ret.tail(wlen)
+                mu = float(r.mean())
+                sigma = float(r.std(ddof=0))
+                sh = float(mu / sigma) if sigma > 0 else np.nan
+            else:
+                mu = np.nan
+                sigma = np.nan
+                sh = np.nan
+            sharpe[wlen] = (mu, sigma, sh)
+            # 超额收益 Sharpe
+            if len(excess_ret) >= wlen:
+                re = excess_ret.tail(wlen)
+                mu_e = float(re.mean())
+                sigma_e = float(re.std(ddof=0))
+                sh_e = float(mu_e / sigma_e) if sigma_e > 0 else np.nan
+            else:
+                mu_e = np.nan
+                sigma_e = np.nan
+                sh_e = np.nan
+            sharpe_excess[wlen] = (mu_e, sigma_e, sh_e)
+            # 第二组权重的 Sharpe
+            if fund_ret_pr is not None and len(fund_ret_pr) >= wlen:
+                r2 = fund_ret_pr.tail(wlen)
+                mu2 = float(r2.mean())
+                sigma2 = float(r2.std(ddof=0))
+                sh2 = float(mu2 / sigma2) if sigma2 > 0 else np.nan
+            else:
+                mu2 = np.nan
+                sigma2 = np.nan
+                sh2 = np.nan
+            sharpe_pr[wlen] = (mu2, sigma2, sh2)
+            if excess_ret_pr is not None and len(excess_ret_pr) >= wlen:
+                re2 = excess_ret_pr.tail(wlen)
+                mu2e = float(re2.mean())
+                sigma2e = float(re2.std(ddof=0))
+                sh2e = float(mu2e / sigma2e) if sigma2e > 0 else np.nan
+            else:
+                mu2e = np.nan
+                sigma2e = np.nan
+                sh2e = np.nan
+            sharpe_excess_pr[wlen] = (mu2e, sigma2e, sh2e)
+
+        # 绘图：累计收益率（%）
+        try:
+            with plt.rc_context({"text.usetex": False}):
+                plt.figure(figsize=(8, 5))
+                plt.plot(fund_cumret.index, fund_cumret.values * 100.0, label="Fund (CV)")
+                if fund_pr_cumret is not None:
+                    plt.plot(fund_pr_cumret.index, fund_pr_cumret.values * 100.0, label="Fund (CV_pr)")
+                plt.plot(idx_cumret.index, idx_cumret.values * 100.0, label="HS300")
+                plt.xlabel("Date")
+                plt.ylabel("Return (%)")
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(plot_path)
+        finally:
+            plt.close()
+
+        return {
+            'fund_nav': nav,
+            'fund_cumret': fund_cumret,
+            'fund_pr_nav': nav_pr,
+            'fund_pr_cumret': fund_pr_cumret,
+            'index_cumret': idx_cumret,
+            'fund_returns': fund_ret,
+            'fund_pr_returns': fund_ret_pr,
+            'index_returns': idx_ret,
+            'excess_returns': excess_ret,
+            'excess_returns_pr': excess_ret_pr,
+            'sharpe': sharpe,
+            'sharpe_pr': sharpe_pr,
+            'sharpe_excess': sharpe_excess,
+            'sharpe_excess_pr': sharpe_excess_pr,
+            'used_tickers': used_tickers,
+            'used_tickers_pr': used_tickers_pr,
+        }
