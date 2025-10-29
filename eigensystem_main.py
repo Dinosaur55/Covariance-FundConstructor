@@ -20,11 +20,19 @@ def main():
 
     # 本征值分解与绘图
     vals, vecs = kit.spectral_decomposition(C_full)
-    kit.plot_eigensystem(vals, vecs, T=R_full.shape[0], N=R_full.shape[1],
-                         eigenvalues_pdf="eigenvalues.pdf",
-                         eigenvectors_pdf="eigenvectors.pdf",
-                         eigenvectors_values_pdf="eigenvectors_values.pdf")
-    print("已输出本征值与本征向量分布的对比图：eigenvalues.pdf, eigenvectors.pdf, eigenvectors_values.pdf")
+    kit.plot_eigensystem(
+        vals,
+        vecs,
+        T=R_full.shape[0],
+        N=R_full.shape[1],
+        eigenvalues_pdf="eigenvalues.png",
+        eigenvectors_pdf="eigenvectors.png",
+        eigenvectors_values_pdf="eigenvectors_values.png",
+        eigenvec2_csv="eigenvector_2.csv",
+        eigenvec3_csv="eigenvector_3.csv",
+        asset_labels=C_full.columns,
+    )
+    print("已输出本征值与本征向量分布的对比图：eigenvalues.png, eigenvectors.png, eigenvectors_values.png；并保存 eigenvector_2.csv 与 eigenvector_3.csv")
 
 if __name__ == "__main__":
     main()

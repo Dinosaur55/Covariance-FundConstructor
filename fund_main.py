@@ -23,9 +23,9 @@ def main():
 
     # 基于 (σ, μ) 的 Pareto 初筛，得到精选收益矩阵
     R_clean = kit.clean_profit_matrix(R_full, output_csv=None,
-                                      plot_path="pareto_mu_sigma.pdf", target_k=40)
+                                      plot_path="pareto_mu_sigma.png", target_k=40)
     print(f"精选收益矩阵形状: {R_clean.shape}")
-    print("已输出收益率均值-标准差散点图为 pareto_mu_sigma.pdf")
+    print("已输出收益率均值-标准差散点图为 pareto_mu_sigma.png")
 
     # 使用精选后的收益矩阵计算关联矩阵
     C_clean = kit.compute_correlation_matrix(R_clean, output_csv=None)
@@ -57,10 +57,10 @@ def main():
         index_csv=index_path,
         start_date="2023-10-02",
         end_date="2024-09-30",
-        plot_path="backtest_fund_vs_hs300.pdf",
+        plot_path="backtest_fund_vs_hs300.png",
         omega_pr=omega_pr_vec,
     )
-    print("回测完成，曲线已保存为 backtest_fund_vs_hs300.pdf")
+    print("回测完成，曲线已保存为 backtest_fund_vs_hs300.png")
 
     # 输出 50/100/150/200 日夏普（普通收益率），以及均值与标准差 - Fund (CV)
     print("基金滚动夏普比率（普通收益率）- Fund (CV)：")

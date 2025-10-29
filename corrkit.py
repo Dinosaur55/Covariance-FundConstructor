@@ -183,7 +183,7 @@ class CorrKit:
         return R
 
     def clean_profit_matrix(self, R: pd.DataFrame, output_csv: Optional[str] = None,
-                            plot_path: str = "pareto_mu_sigma.pdf",
+                            plot_path: str = "pareto_mu_sigma.png",
                             target_k: Optional[int] = 40) -> pd.DataFrame:
         """
         基于 Pareto 思想在 (σ, μ) 平面进行筛选，并按夏普比率补齐到目标数量，返回精选后的收益矩阵 R_clean。
@@ -543,14 +543,18 @@ class CorrKit:
         return beta
 
     def plot_eigensystem(self, eigvals: np.ndarray, eigvecs: np.ndarray, T: int, N: int,
-                          eigenvalues_pdf: str = "eigenvalues.pdf",
-                          eigenvectors_pdf: str = "eigenvectors.pdf",
-                          eigenvectors_values_pdf: str = "eigenvectors_values.pdf") -> None:
+                         eigenvalues_pdf: str = "eigenvalues.png",
+                         eigenvectors_pdf: str = "eigenvectors.png",
+                         eigenvectors_values_pdf: str = "eigenvectors_values.png",
+                         eigenvec2_csv: str = "eigenvector_2.csv",
+                         eigenvec3_csv: str = "eigenvector_3.csv",
+                         asset_labels: Optional[Union[pd.Index, list]] = None) -> None:
         """
         绘制谱系结果：
-          - 本征值直方图（与随机矩阵理论 MP 密度对比，并标注 λ±）
-          - 上排：最大的 3 个本征向量元素分布；下排：第 50、100、200 个本征向量元素分布
+            - 本征值直方图（与随机矩阵理论 MP 密度对比，并标注 λ±）
+            - 上排：最大的 3 个本征向量元素分布；下排：第 50、100、200 个本征向量元素分布
         说明：不生成随机矩阵，仅叠加理论曲线。
+        额外输出：保存第 2、3 大本征向量分量为 N×1 列向量 CSV（带股票代码索引）。
         """
         # 计算 Q 与理论端点 λ±
         Q = T / N
@@ -592,6 +596,7 @@ class CorrKit:
         plt.tight_layout()
         plt.savefig(eigenvalues_pdf)
         plt.close()
+
         # 本征向量元素分布：上排=最大3个；下排=第50/100/200个（均以“从大到小排序”的序号定义）
         # 注意：此时 eigvals/ eigvecs 已按从大到小排列，因此索引 0,1,2 即为最大三个
         top3_idx = [0, 1, 2]
@@ -680,13 +685,27 @@ class CorrKit:
         plt.savefig(eigenvectors_values_pdf)
         plt.close()
 
+        # 保存第 2、3 大本征向量分量到 CSV（N×1 列向量，索引为股票代码）
+        try:
+            if asset_labels is not None and len(asset_labels) == N:
+                labels = pd.Index(asset_labels)
+            else:
+                labels = pd.Index([f"{i}" for i in range(1, N + 1)], name="ticker")
+            if eigvecs.shape[1] >= 3:
+                u2 = pd.Series(eigvecs[:, 1], index=labels, name="u2")
+                u3 = pd.Series(eigvecs[:, 2], index=labels, name="u3")
+                u2.to_frame().to_csv(eigenvec2_csv, index=True)
+                u3.to_frame().to_csv(eigenvec3_csv, index=True)
+        except Exception as e:
+            print(f"保存本征向量 CSV 失败: {e}")
+
     def backtest_buy_and_hold(self,
                                omega,
                                stock_csv: Optional[str] = None,
                                index_csv: Optional[str] = None,
                                start_date: Optional[str] = None,
                                end_date: Optional[str] = None,
-                               plot_path: str = "backtest_fund_vs_hs300.pdf",
+                               plot_path: str = "backtest_fund_vs_hs300.png",
                                omega_pr=None) -> dict:
         """
         基于给定权重（买入持有）回测基金净值，并与指数累计收益率进行比较。
