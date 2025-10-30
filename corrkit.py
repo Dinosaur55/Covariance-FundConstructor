@@ -183,7 +183,7 @@ class CorrKit:
         return R
 
     def clean_profit_matrix(self, R: pd.DataFrame, output_csv: Optional[str] = None,
-                            plot_path: str = "pareto_mu_sigma.png",
+                            plot_path: str = "pareto_mu_sigma.pdf",
                             target_k: Optional[int] = 40) -> pd.DataFrame:
         """
         基于 Pareto 思想在 (σ, μ) 平面进行筛选，并按夏普比率补齐到目标数量，返回精选后的收益矩阵 R_clean。
@@ -543,9 +543,9 @@ class CorrKit:
         return beta
 
     def plot_eigensystem(self, eigvals: np.ndarray, eigvecs: np.ndarray, T: int, N: int,
-                         eigenvalues_pdf: str = "eigenvalues.png",
-                         eigenvectors_pdf: str = "eigenvectors.png",
-                         eigenvectors_values_pdf: str = "eigenvectors_values.png",
+                         eigenvalues_pdf: str = "eigenvalues.pdf",
+                         eigenvectors_pdf: str = "eigenvectors.pdf",
+                         eigenvectors_values_pdf: str = "eigenvectors_values.pdf",
                          eigenvec2_csv: str = "eigenvector_2.csv",
                          eigenvec3_csv: str = "eigenvector_3.csv",
                          asset_labels: Optional[Union[pd.Index, list]] = None) -> None:
@@ -705,7 +705,7 @@ class CorrKit:
                                index_csv: Optional[str] = None,
                                start_date: Optional[str] = None,
                                end_date: Optional[str] = None,
-                               plot_path: str = "backtest_fund_vs_hs300.png",
+                               plot_path: str = "backtest_fund_vs_hs300.pdf",
                                omega_pr=None) -> dict:
         """
         基于给定权重（买入持有）回测基金净值，并与指数累计收益率进行比较。
@@ -855,7 +855,7 @@ class CorrKit:
             fund_ret_pr = None
             excess_ret_pr = None
 
-        # 计算多窗口夏普（均值/标准差；总体标准差 ddof=0）
+        # 计算多窗口夏普（窗口内年化/区间化处理：mu*=T，sigma*=sqrt(T)；总体标准差 ddof=0）
         sharpe_windows = [50, 100, 150, 200]
         sharpe = {}
         sharpe_excess = {}
@@ -864,9 +864,14 @@ class CorrKit:
         for wlen in sharpe_windows:
             if len(fund_ret) >= wlen:
                 r = fund_ret.tail(wlen)
-                mu = float(r.mean())
-                sigma = float(r.std(ddof=0))
-                sh = float(mu / sigma) if sigma > 0 else np.nan
+                # 日均与日波动
+                mu_daily = float(r.mean())
+                sigma_daily = float(r.std(ddof=0))
+                # 按窗口长度 T 放大：mu*=T，sigma*=sqrt(T)
+                T_w = len(r)
+                mu = mu_daily * T_w
+                sigma = sigma_daily * (np.sqrt(T_w) if T_w > 0 else np.nan)
+                sh = float(mu / sigma) if (sigma is not None and np.isfinite(sigma) and sigma > 0) else np.nan
             else:
                 mu = np.nan
                 sigma = np.nan
@@ -875,9 +880,12 @@ class CorrKit:
             # 超额收益 Sharpe
             if len(excess_ret) >= wlen:
                 re = excess_ret.tail(wlen)
-                mu_e = float(re.mean())
-                sigma_e = float(re.std(ddof=0))
-                sh_e = float(mu_e / sigma_e) if sigma_e > 0 else np.nan
+                mu_e_daily = float(re.mean())
+                sigma_e_daily = float(re.std(ddof=0))
+                T_w = len(re)
+                mu_e = mu_e_daily * T_w
+                sigma_e = sigma_e_daily * (np.sqrt(T_w) if T_w > 0 else np.nan)
+                sh_e = float(mu_e / sigma_e) if (sigma_e is not None and np.isfinite(sigma_e) and sigma_e > 0) else np.nan
             else:
                 mu_e = np.nan
                 sigma_e = np.nan
@@ -886,9 +894,12 @@ class CorrKit:
             # 第二组权重的 Sharpe
             if fund_ret_pr is not None and len(fund_ret_pr) >= wlen:
                 r2 = fund_ret_pr.tail(wlen)
-                mu2 = float(r2.mean())
-                sigma2 = float(r2.std(ddof=0))
-                sh2 = float(mu2 / sigma2) if sigma2 > 0 else np.nan
+                mu2_daily = float(r2.mean())
+                sigma2_daily = float(r2.std(ddof=0))
+                T_w = len(r2)
+                mu2 = mu2_daily * T_w
+                sigma2 = sigma2_daily * (np.sqrt(T_w) if T_w > 0 else np.nan)
+                sh2 = float(mu2 / sigma2) if (sigma2 is not None and np.isfinite(sigma2) and sigma2 > 0) else np.nan
             else:
                 mu2 = np.nan
                 sigma2 = np.nan
@@ -896,9 +907,12 @@ class CorrKit:
             sharpe_pr[wlen] = (mu2, sigma2, sh2)
             if excess_ret_pr is not None and len(excess_ret_pr) >= wlen:
                 re2 = excess_ret_pr.tail(wlen)
-                mu2e = float(re2.mean())
-                sigma2e = float(re2.std(ddof=0))
-                sh2e = float(mu2e / sigma2e) if sigma2e > 0 else np.nan
+                mu2e_daily = float(re2.mean())
+                sigma2e_daily = float(re2.std(ddof=0))
+                T_w = len(re2)
+                mu2e = mu2e_daily * T_w
+                sigma2e = sigma2e_daily * (np.sqrt(T_w) if T_w > 0 else np.nan)
+                sh2e = float(mu2e / sigma2e) if (sigma2e is not None and np.isfinite(sigma2e) and sigma2e > 0) else np.nan
             else:
                 mu2e = np.nan
                 sigma2e = np.nan

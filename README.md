@@ -19,20 +19,20 @@
 
 > eigensystem_main.py
 >
-> eigenvalues.png
+> eigenvalues.pdf
 >
-> eigenvectors.png
+> eigenvectors.pdf
 
 （b）选股以及优化基金（回测日期：2023-10-2~2024-10-1）
 
 > fund_main.py
 > 
-> pareto_mu_sigma.png
+> pareto_mu_sigma.pdf
 >
-> backtest_fund_vs_hs300.png
+> backtest_fund_vs_hs300.pdf
 
 ## 技术路线
-![技术路线](CVFC.png)
+![技术路线](CVFC.pdf)
 
 ## 特别鸣谢
 

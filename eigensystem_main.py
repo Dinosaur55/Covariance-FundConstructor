@@ -11,7 +11,7 @@ def main():
     kit = CorrKit(input_path)
 
     # 计算收益矩阵
-    R_full = kit.compute_profit_matrix(output_csv=output_profit_full, start_date="2022-10-01", end_date="2024-10-01")
+    R_full = kit.compute_profit_matrix(output_csv=output_profit_full, start_date="2020-10-01", end_date="2023-10-01")
     print(f"收益矩阵形状: {R_full.shape}")
 
     # 计算关联矩阵
@@ -25,14 +25,14 @@ def main():
         vecs,
         T=R_full.shape[0],
         N=R_full.shape[1],
-        eigenvalues_pdf="eigenvalues.png",
-        eigenvectors_pdf="eigenvectors.png",
-        eigenvectors_values_pdf="eigenvectors_values.png",
+        eigenvalues_pdf="eigenvalues.pdf",
+        eigenvectors_pdf="eigenvectors.pdf",
+        eigenvectors_values_pdf="eigenvectors_values.pdf",
         eigenvec2_csv="eigenvector_2.csv",
         eigenvec3_csv="eigenvector_3.csv",
         asset_labels=C_full.columns,
     )
-    print("已输出本征值与本征向量分布的对比图：eigenvalues.png, eigenvectors.png, eigenvectors_values.png；并保存 eigenvector_2.csv 与 eigenvector_3.csv")
+    print("已输出本征值与本征向量分布的对比图：eigenvalues.pdf, eigenvectors.pdf, eigenvectors_values.pdf；并保存 eigenvector_2.csv 与 eigenvector_3.csv")
 
 if __name__ == "__main__":
     main()
